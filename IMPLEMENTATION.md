@@ -45,12 +45,6 @@ The system uses a dual-core Arduino Opta controller with the following architect
   - `storageCellSwitch`: Storage cell limit switch state
   - `queueLength`: Number of pending requests
 
-### Legacy Expansion Module Endpoints
-- POST /clamp - Control individual clamp
-- POST /clamps - Control multiple clamps
-- GET /clamp - Get clamp status
-- GET /status - Get expansion module status
-
 ## Network Configuration
 
 ### Ethernet (Primary)

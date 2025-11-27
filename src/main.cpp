@@ -2,13 +2,6 @@
 #include "protocol.h"
 #include <Arduino.h>
 #include <RPC.h>
-
-#include <OptaBlue.h>
-#include <opta_info.h>
-#include <Thread.h>
-#include <mbed.h>
-#include "DigitalExpansion.h"
-
 #include <WiFi.h>
 #include <Ethernet.h>
 #include <ArduinoJson.h>
@@ -16,18 +9,20 @@
 
 // Network state
 enum class NetworkType { NONE, ETHERNET, WIFI };
-NetworkType activeNetwork = NetworkType::NONE;
+auto activeNetwork = NetworkType::NONE;
 unsigned long lastConnectionCheck = 0;
-const unsigned long CONNECTION_CHECK_INTERVAL = 5000; // Check every 5 seconds
+constexpr unsigned long CONNECTION_CHECK_INTERVAL = 5000; // Check every 5 seconds
 
 // Request queue for handling multiple requests
 std::queue<ConveyorRequest> requestQueue;
 int nextRequestId = 1;
 EthernetServer server(80);
 
-// WiFi credentials (user should set these)
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+// Wi-Fi credentials (user should set these)
+auto WIFI_SSID = "YOUR_WIFI_SSID";
+auto WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+
+void listenAndServe();
 
 // Network initialization functions
 bool initEthernet() {
@@ -84,7 +79,7 @@ void initNetwork() {
         return;
     }
 
-    // Fallback to WiFi
+    // Fallback to Wi-Fi
     Serial.println("Ethernet unavailable, trying WiFi...");
     if (initWiFi()) {
         return;
@@ -95,7 +90,7 @@ void initNetwork() {
 }
 
 void checkAndReconnect() {
-    unsigned long currentTime = millis();
+    const unsigned long currentTime = millis();
     if (currentTime - lastConnectionCheck < CONNECTION_CHECK_INTERVAL) {
         return;
     }
@@ -142,38 +137,19 @@ void setup()
 
 // RPC functions to communicate with M4
 void sendRequestToM4(const ConveyorRequest& req) {
-    RPC.call("processRequest", req.requestId, (int)req.command, req.targetDistance);
+    RPC.call("processRequest", req.requestId, static_cast<int>(req.command), req.targetDistance);
 }
 
 ConveyorResponse getStatusFromM4() {
-    ConveyorResponse response;
-
     // Call multiple RPC functions to get full status
-    auto reqIdResult = RPC.call("getStatus");
-    auto statusCodeResult = RPC.call("getStatusCode");
-    auto positionResult = RPC.call("getCurrentPosition");
-    auto roboticSwitchResult = RPC.call("getRoboticSwitchState");
-    auto storageSwitchResult = RPC.call("getStorageSwitchState");
-
-    if (reqIdResult) {
-        response.requestId = reqIdResult.as<int>();
-    }
-
-    if (statusCodeResult) {
-        response.status = (MoveStatus)statusCodeResult.as<int>();
-    }
-
-    if (positionResult) {
-        response.currentPosition = positionResult.as<float>();
-    }
-
-    if (roboticSwitchResult) {
-        response.roboticCellSwitch = roboticSwitchResult.as<bool>();
-    }
-
-    if (storageSwitchResult) {
-        response.storageCellSwitch = storageSwitchResult.as<bool>();
-    }
+    // RPC.call returns a msgpack handle that must be converted directly.
+    // We cannot check 'if (result)' because it is not a pointer.
+    ConveyorResponse response{};
+    response.requestId = RPC.call("getStatus").as<int>();
+    response.status = static_cast<MoveStatus>(RPC.call("getStatusCode").as<int>());
+    response.currentPosition = RPC.call("getCurrentPosition").as<float>();
+    response.roboticCellSwitch = RPC.call("getRoboticSwitchState").as<bool>();
+    response.storageCellSwitch = RPC.call("getStorageSwitchState").as<bool>();
 
     return response;
 }
@@ -184,13 +160,14 @@ void processRequestQueue() {
     }
 
     // Check if M4 is busy
-    auto busyResult = RPC.call("isBusy");
-    if (!busyResult || busyResult.as<bool>()) {
+    // We directly extract the bool. If the RPC call had failed completely,
+    // the system would likely hang or throw an exception before reaching here.
+    if (RPC.call("isBusy").as<bool>()) {
         return; // M4 is still processing
     }
 
     // Send next request to M4
-    ConveyorRequest req = requestQueue.front();
+    const ConveyorRequest req = requestQueue.front();
     requestQueue.pop();
     sendRequestToM4(req);
 }
@@ -220,16 +197,13 @@ struct RequestData {
     String body;
 };
 
-void Response(const RequestData& req, const String& message, int statusCode = 200) {
+void Response(const RequestData& req, const String& message, const int statusCode = 200) {
     EthernetClient client = req.client;
-    // Consider buffering the output or using a more efficient string handling
-    client.print(F("HTTP/1.1 ")); // Using F() macro to save RAM
+    client.print(F("HTTP/1.1 "));
     client.println(statusCode);
-    // ...rest of the response
     client.println("Content-type: application/json");
     client.println("Connection: close");
     client.println();
-
     client.println(message);
     client.println();
 }
@@ -246,7 +220,7 @@ void Success(const RequestData& req, const String& message) {
 void moveToRoboticCell(const RequestData& req) {
     Serial.println("Request: Move to Robotic Cell");
 
-    ConveyorRequest convReq;
+    ConveyorRequest convReq{};
     convReq.requestId = nextRequestId++;
     convReq.command = MoveCommand::MOVE_TO_ROBOTIC_CELL;
     convReq.targetDistance = 0;
@@ -266,7 +240,7 @@ void moveToRoboticCell(const RequestData& req) {
 void moveToStorageCell(const RequestData& req) {
     Serial.println("Request: Move to Storage Cell");
 
-    ConveyorRequest convReq;
+    ConveyorRequest convReq{};
     convReq.requestId = nextRequestId++;
     convReq.command = MoveCommand::MOVE_TO_STORAGE_CELL;
     convReq.targetDistance = 0;
@@ -292,7 +266,7 @@ void moveToDistance(const RequestData& req) {
     }
 
     JsonDocument doc;
-    auto err = deserializeJson(doc, req.body);
+    const auto err = deserializeJson(doc, req.body);
 
     if (err) {
         Serial.println("JSON parse error");
@@ -300,14 +274,14 @@ void moveToDistance(const RequestData& req) {
         return;
     }
 
-    if (!doc.containsKey("distance")) {
+    if (!doc["distance"]) {
         Failed(req, "Missing 'distance' field");
         return;
     }
 
-    float distance = doc["distance"];
+    const auto distance = doc["distance"].as<float>();
 
-    ConveyorRequest convReq;
+    ConveyorRequest convReq{};
     convReq.requestId = nextRequestId++;
     convReq.command = MoveCommand::MOVE_TO_DISTANCE;
     convReq.targetDistance = distance;
@@ -332,7 +306,7 @@ void getConveyorStatus(const RequestData& req) {
 
     JsonDocument doc;
     doc["requestId"] = status.requestId;
-    doc["status"] = (int)status.status;
+    doc["status"] = static_cast<int>(status.status);
     doc["currentPosition"] = status.currentPosition;
     doc["roboticCellSwitch"] = status.roboticCellSwitch;
     doc["storageCellSwitch"] = status.storageCellSwitch;
@@ -343,7 +317,7 @@ void getConveyorStatus(const RequestData& req) {
     Success(req, response);
 }
 
-// Responds with html of the current state of the controller.
+// Responds with HTML of the current state of the controller.
 void index(const RequestData& req) {
     EthernetClient client = req.client;
 
@@ -365,174 +339,12 @@ void index(const RequestData& req) {
     client.println("<li>POST /move/storage - Move to storage cell</li>");
     client.println("<li>POST /move/distance - Move to specific distance (JSON: {\"distance\": 100.0})</li>");
     client.println("<li>GET /conveyor/status - Get current status</li>");
-    client.println("<li>GET /status - Get expansion module status</li>");
     client.println("</ul>");
     client.println("</body>");
     client.println("</html>");
     client.println();
 }
 
-// Responds with JSON containing the status of the 8 outputs on the expansion module.
-void status(const RequestData &req) {
-    Serial.println("Fetching status of the expansion module.");
-
-    // Get the first expansion module
-    DigitalExpansion exp = OptaController.getExpansion(0);
-    if (!exp) {
-        Serial.println("Expansion module not found.");
-        Failed(req, "Expansion module not found.");
-        return;
-    }
-
-    // Retrieve the status of the outputs
-    JsonDocument doc;
-    JsonArray outputs = doc["outputs"].to<JsonArray>();
-
-    for (int i = 0; i < 8; i++) {
-        bool state = exp.digitalOutRead(i); // Get the status of each output
-        outputs.add(state);
-    }
-
-    // Serialize the JSON document and send the response
-    String response;
-    serializeJson(doc, response);
-    Success(req, response);
-
-    Serial.println("Status sent successfully.");
-}
-
-void setClamp(const RequestData& req) {
-    Serial.println("Setting Clamp.");
-    if (req.contentType == "application/json") {
-        JsonDocument doc;
-        auto err = deserializeJson(doc, req.body);
-
-        if (err)
-        {
-            Serial.println("deserializeJson() failed: ");
-            Serial.println(err.c_str());
-            Failed(req, "Invalid JSON.");
-            return;
-        }
-        int clampID = doc["id"];
-        bool clampOn = doc["status"];
-
-        if (clampID < 0 || clampID > 7) {
-            Serial.println("Clamp ID out of range.");
-            Failed(req, "Invalid clamp ID.");
-            return;
-        }
-
-        Serial.println("Clamp ID: " + String(clampID));
-        DigitalExpansion exp = OptaController.getExpansion(0);
-        exp.digitalWrite(clampID, clampOn ? LOW : HIGH);
-        exp.updateDigitalOutputs();
-        JsonDocument responseDoc;
-        responseDoc["id"] = clampID;
-        responseDoc["status"] = true;
-        String response;
-        serializeJson(responseDoc, response);
-        Success(req, response);
-        Serial.println("Setting Clamp: " + String(clampID) + " to " + String(clampOn));
-    } else {
-        Serial.println("Invalid content type.");
-    }
-}
-
-void setClamps(const RequestData& req) {
-    Serial.println("Setting Clamp.");
-    if (req.contentType == "application/json") {
-        JsonDocument doc;
-        auto err = deserializeJson(doc, req.body);
-
-        if (err)
-        {
-            Serial.println("deserializeJson() failed: ");
-            Serial.println(err.c_str());
-            Failed(req, "Invalid JSON.");
-            return;
-        }
-
-        DigitalExpansion exp = OptaController.getExpansion(0);
-        JsonArray array = doc["clamps"].as<JsonArray>();
-        JsonDocument responseDoc;
-        JsonArray passedClamps = responseDoc["passed"].to<JsonArray>();
-        JsonArray failedClamps = responseDoc["failed"].to<JsonArray>();
-
-        for (JsonVariant v: array) {
-            int clampID = v["id"];
-            bool clampOn = v["status"];
-
-            if (clampID < 0 || clampID > 7) {
-                Serial.println("Clamp" + String(clampID) + "ID out of range.");
-                failedClamps.add(clampID);  // Add failed clamp ID to "failed" array
-                return;
-            }
-            Serial.println("Clamp ID: " + String(clampID) + "set");
-            exp.digitalWrite(clampID, clampOn ? LOW : HIGH);
-            passedClamps.add(clampID);  // Add passed clamp ID to "passed" array
-        }
-
-        exp.updateDigitalOutputs();
-        String response;
-        serializeJson(responseDoc, response);
-        Success(req, response);
-        Serial.println("");
-    } else {
-        Serial.println("Invalid content type.");
-    }
-}
-
-void getClamp(const RequestData& req) {
-    Serial.println("Getting Clamp Status.");
-    // Verify if the content type is JSON
-    if (req.contentType != "application/json") {
-        Serial.println("Invalid content type. Expected application/json.");
-        Failed(req, "Invalid content type. Expected application/json.");
-        return;
-    }
-    // Parse ID from the request body
-    JsonDocument doc;
-    auto err = deserializeJson(doc, req.body);
-
-    if (err) {
-        Serial.println("Failed to parse JSON from request body: ");
-        Serial.println(err.c_str());
-        Failed(req, "Invalid JSON.");
-        return;
-    }
-
-    int clampID = doc["id"];
-    if (clampID < 0 || clampID > 7) {
-        Serial.println("Invalid clamp ID in request body.");
-        Failed(req, "Invalid clamp ID. Must be between 0 and 7.");
-        return;
-    }
-
-    Serial.println("Clamp ID: " + String(clampID));
-    // Get the first expansion module
-    DigitalExpansion exp = OptaController.getExpansion(0);
-    if (!exp) {
-        Serial.println("Expansion module not found.");
-        Failed(req, "Expansion module not found.");
-        return;
-    }
-
-// Retrieve the status of the specific output
-    bool clampStatus = exp.digitalOutRead(clampID);
-
-// Build the response JSON
-    JsonDocument responseDoc;
-    responseDoc["id"] = clampID;
-    responseDoc["status"] = clampStatus;
-
-// Serialize the JSON document and send the response
-    String response;
-    serializeJson(responseDoc, response);
-    Success(req, response);
-
-    Serial.println("Clamp Status sent successfully: " + response);
-}
 
 RequestData buildRequest(EthernetClient client) {
     Serial.println("New Client.");
@@ -541,35 +353,35 @@ RequestData buildRequest(EthernetClient client) {
     RequestData req;
     req.contentLength = -1;
     req.client = client;
-    String path = client.readStringUntil('\n');
-    int pathStart = path.indexOf(" ");
-    int pathEnd = path.indexOf( " ", pathStart + 1);
+    const String path = client.readStringUntil('\n');
+    const int pathStart = path.indexOf(" ");
+    const int pathEnd = path.indexOf( " ", pathStart + 1);
     req.method = path.substring(0, pathStart);
     req.path = path.substring(pathStart + 1, pathEnd);
 
     while (client.connected()) {            // loop while the client's connected
-        if (client.available()) {           // if there's bytes to read from the client,
-            char c = client.read();         // read a byte, then
+        if (client.available()) {           // if there are bytes to read from the client,
+            const char c = client.read();         // read a byte, then
             Serial.write(c);                // print it out the serial monitor
             if (c == '\n') {
-                // if the byte is a newline character
+                // if the byte is a newline character,
                 // if the current line is blank, you got two newline characters in a row.
                 // that's the end of the client HTTP request, so send a response:
                 if (currentLine.length() == 0) {
                     String body = "";
                     if (req.contentLength != -1) {
                         char buffer[1024];
-                        size_t res = client.readBytes(buffer, req.contentLength);
+                        const size_t res = client.readBytes(buffer, req.contentLength);
                         Serial.println(res);
                         Serial.println(buffer);
                         body = String(buffer);
                         req.body = body.substring(0, req.contentLength);
                     }
                     break;
-                } else {      // if you got a newline, then clear currentLine:
+                } else {      // if you got a newline, then clear the currentLine:
                     if (currentLine.startsWith("Content-Length: ")) {
-                        // Extract the number after "Content-Length: "
-                        String lengthStr = currentLine.substring(16); // 16 is the length of "Content-Length: "
+                        // Extract the number after "Content-Length":
+                        String lengthStr = currentLine.substring(16); // 16 is the length of "Content-Length:"
                         req.contentLength = lengthStr.toInt();
                     }
 
@@ -589,63 +401,34 @@ RequestData buildRequest(EthernetClient client) {
     return req;
 }
 
-void printConnecting() {
-    static int dotCount = 0;
-    dotCount = dotCount > 3 ? 0 : dotCount + 1;
-    //Clear the line
-    Serial.print("\\r\\x1b[2K");
-    Serial.print("Reconnecting");
-    for (int i = 0; i < dotCount; i++) {
-        Serial.print(".");
-    }
-    Serial.flush();
-}
-
 void listenAndServe(){
-    //Double check connection status, and update if not connected.
-    auto linkStatus = Ethernet.linkStatus();
-    if (linkStatus != LinkON) {
-        int connectionStatus = Ethernet.begin();
-        while (connectionStatus == WL_CONNECT_FAILED) {
-            printConnecting();
-            delay(1000);
-            connectionStatus = Ethernet.begin();
-        }
-        //Waiting
-        Serial.println("Connected to network, starting server.");
-        server.begin();
-        Serial.print("Use this URL to connect: http://");
-        Serial.println(Ethernet.localIP());
-        Serial.print("Device MAC address: ");
-        Serial.println(Ethernet.macAddress());
-        delay(2000);
-    }
-
     auto client = server.accept();
     if (!client) {
         return;
     }
+
     Serial.println("Client Connected.");
-    RequestData req = buildRequest(client);
-    Serial.println("current request: ");
+    const RequestData req = buildRequest(client);
+    Serial.print("Request: ");
+    Serial.print(req.method);
+    Serial.print(" ");
     Serial.println(req.path);
-    Serial.println(req.method);
 
     // Conveyor movement routes
-    if (req.path == "/move/robotic" && req.method == "POST") moveToRoboticCell(req);
-    else if (req.path == "/move/storage" && req.method == "POST") moveToStorageCell(req);
-    else if (req.path == "/move/distance" && req.method == "POST") moveToDistance(req);
-    else if (req.path == "/conveyor/status" && req.method == "GET") getConveyorStatus(req);
-    // Original expansion module routes
-    else if (req.path == "/clamp" && req.method == "POST") setClamp(req);
-    else if (req.path == "/clamps" && req.method == "POST") setClamps(req);
-    else if (req.path == "/clamp" && req.method == "GET") getClamp(req);
-    else if (req.path == "/status" && req.method == "GET") status(req);
-    else if (req.path == "/" && req.method == "GET") index(req);
-    else {
-        Response(req, "Not Found", 404);
+    if (req.path == "/move/robotic" && req.method == "POST") {
+        moveToRoboticCell(req);
+    } else if (req.path == "/move/storage" && req.method == "POST") {
+        moveToStorageCell(req);
+    } else if (req.path == "/move/distance" && req.method == "POST") {
+        moveToDistance(req);
+    } else if (req.path == "/conveyor/status" && req.method == "GET") {
+        getConveyorStatus(req);
+    } else if (req.path == "/" && req.method == "GET") {
+        index(req);
+    } else {
+        Response(req, R"({"error":"Not Found"})", 404);
     }
 
-    if (client) client.stop();
+    client.stop();
     Serial.println("Client Disconnected.");
 }

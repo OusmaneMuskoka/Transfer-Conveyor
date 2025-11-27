@@ -12,8 +12,8 @@ ezButton storageCellSwitch(LIMIT_SWITCH_END_PIN);    // Storage cell position
 
 // Current state
 volatile int currentRequestId = 0;
-volatile MoveStatus currentStatus = MoveStatus::IDLE;
-volatile MoveCommand activeCommand = MoveCommand::GET_STATUS;
+volatile auto currentStatus = MoveStatus::IDLE;
+volatile auto activeCommand = MoveCommand::GET_STATUS;
 volatile float targetDistance = 0;
 volatile float currentPosition = 0;
 volatile bool isBusy = false;
@@ -78,9 +78,9 @@ void executeMovement() {
 }
 
 // RPC Functions callable by M7
-void processRequest(int requestId, int command, float distance) {
+void processRequest(const int requestId, int command, const float distance) {
     currentRequestId = requestId;
-    activeCommand = (MoveCommand)command;
+    activeCommand = static_cast<MoveCommand>(command);
     targetDistance = distance;
     isBusy = true;
     currentStatus = MoveStatus::MOVING;
@@ -89,19 +89,19 @@ void processRequest(int requestId, int command, float distance) {
 
     switch (activeCommand) {
         case MoveCommand::MOVE_TO_ROBOTIC_CELL:
-            // Move in negative direction to robotic cell
-            stepper.move(-1000000); // Large negative move, will stop on limit switch
+            // Move in a negative direction to robotic cell
+            stepper.move(-1000000); // Large negative move will stop on the limit switch
             stepper.setSpeed(-SPEED);
             break;
 
         case MoveCommand::MOVE_TO_STORAGE_CELL:
             // Move in positive direction to storage cell
-            stepper.move(1000000); // Large positive move, will stop on limit switch
+            stepper.move(1000000); // Large positive move will stop on limit switch
             stepper.setSpeed(SPEED);
             break;
 
         case MoveCommand::MOVE_TO_DISTANCE:
-            // Move to specific position
+            // Move to a specific position
             stepper.moveTo(distance);
             break;
 
@@ -124,12 +124,12 @@ bool getBusyStatus() {
 
 int getStatus() {
     // Return current status data to M7
-    // M7 will need to call additional RPC functions to get full status
+    // will need to call additional RPC functions to get full status
     return currentRequestId;
 }
 
 int getStatusCode() {
-    return (int)currentStatus;
+    return static_cast<int>(currentStatus);
 }
 
 float getCurrentPosition() {
